@@ -53,13 +53,15 @@ class Viewer:
 
     def _poll(self):
         # Close automatically once the bridge stops updating its heartbeat — i.e.
-        # the game quit. Only arms after we've seen at least one live heartbeat,
-        # so a manually-opened overlay (no game running) stays put.
+        # the game quit. Only arms after we've seen a LIVE (fresh) heartbeat, so a
+        # stale file from a previous session can't close a freshly-opened overlay,
+        # and a manually-opened overlay with no game running stays put.
         try:
             age = time.time() - os.path.getmtime(HEARTBEAT_PATH)
-            self._seen_hb = True
-            if age > HEARTBEAT_GRACE:
-                self.root.destroy()
+            if age <= HEARTBEAT_GRACE:
+                self._seen_hb = True          # bridge is live
+            elif self._seen_hb:
+                self.root.destroy()           # was live, now stale -> game quit
                 return
         except FileNotFoundError:
             pass

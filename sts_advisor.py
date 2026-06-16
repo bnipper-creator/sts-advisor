@@ -578,6 +578,16 @@ def main(cfg):
     log(cfg, f"=== STS_ADVISOR bridge starting "
             f"(mode={cfg.get('mode', 'stream')}, model={cfg['model']}) ===")
     advisor = Advisor(cfg)
+
+    hb_path = os.path.join(os.path.dirname(cfg["latest_advice_path"]), "heartbeat")
+    # Stamp a FRESH heartbeat before launching the overlay, so it sees the bridge
+    # as live immediately and doesn't self-close on a stale file from a prior run.
+    last_hb = time.time()
+    try:
+        with open(hb_path, "w") as _f:
+            _f.write(str(last_hb))
+    except Exception:
+        last_hb = 0.0
     if cfg.get("launch_viewer", True):
         launch_viewer(cfg)
 
@@ -590,8 +600,6 @@ def main(cfg):
     debounce_s = float(cfg.get("debounce_seconds", 1.5))
     was_in_game = False
     wait_frames = int(cfg.get("heartbeat_wait_frames", 20))
-    hb_path = os.path.join(os.path.dirname(cfg["latest_advice_path"]), "heartbeat")
-    last_hb = 0.0
 
     for raw in sys.stdin:
         raw = raw.lstrip("﻿").strip()  # tolerate a stray UTF-8 BOM
