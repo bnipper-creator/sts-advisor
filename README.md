@@ -57,14 +57,14 @@ That's it — no API keys, no manual path editing.
 
 ## Run
 
-1. (Optional) open the advice overlay:
-   ```
-   py sts_viewer.py
-   ```
-   It's always-on-top; run the game in **borderless/windowed** mode so you can see it.
-2. Launch Slay the Spire **via ModTheSpire** with BaseMod + CommunicationMod enabled.
-3. Start a run. On each decision screen, advice shows up in the overlay and in
+1. Launch Slay the Spire **via ModTheSpire** with BaseMod + CommunicationMod enabled.
+   The advice overlay **opens automatically** with the game and **closes when you quit**.
+   Run the game in **borderless/windowed** mode so you can see the overlay beside it.
+2. Start a run. On each decision screen, advice shows up in the overlay and in
    `state\latest_advice.txt`. Combat is all yours — no calls happen during fights.
+
+(To open the overlay by hand instead, set `"launch_viewer": false` in `config.json`
+and run `py sts_viewer.py` yourself.)
 
 First decision after launch is the slowest (the model warms up); after that it's a
 couple seconds per screen.

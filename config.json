@@ -15,5 +15,6 @@
   "advice_log_path": "state\\advice_log.txt",
   "debug_log_path": "state\\debug.log",
   "prefight_heads_up": false,
-  "heartbeat_wait_frames": 20
+  "heartbeat_wait_frames": 20,
+  "launch_viewer": true
 }

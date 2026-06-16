@@ -530,6 +530,28 @@ class Advisor:
 # Main loop
 # --------------------------------------------------------------------------- #
 
+def launch_viewer(cfg):
+    """Spawn the advice overlay as a detached, console-less process so it appears
+    automatically when the game (and thus this bridge) starts. The overlay closes
+    itself when the heartbeat below goes stale (i.e. the game quits)."""
+    import subprocess
+    viewer = os.path.join(HERE, "sts_viewer.py")
+    if not os.path.exists(viewer):
+        return
+    pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    exe = pyw if os.path.exists(pyw) else sys.executable  # no console window
+    try:
+        subprocess.Popen(
+            [exe, viewer], cwd=HERE,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+        )
+        log(cfg, "advice overlay launched")
+    except Exception:
+        log(cfg, "viewer launch failed:\n" + traceback.format_exc())
+
+
 def main(cfg):
     # Make stdout/stdin behave: utf-8, '\n' line endings, no buffering surprises.
     try:
@@ -545,6 +567,8 @@ def main(cfg):
     log(cfg, f"=== STS_ADVISOR bridge starting "
             f"(mode={cfg.get('mode', 'stream')}, model={cfg['model']}) ===")
     advisor = Advisor(cfg)
+    if cfg.get("launch_viewer", True):
+        launch_viewer(cfg)
 
     # Handshake: announce readiness, then the mod streams state.
     send("ready")
@@ -555,6 +579,8 @@ def main(cfg):
     debounce_s = float(cfg.get("debounce_seconds", 1.5))
     was_in_game = False
     wait_frames = int(cfg.get("heartbeat_wait_frames", 20))
+    hb_path = os.path.join(os.path.dirname(cfg["latest_advice_path"]), "heartbeat")
+    last_hb = 0.0
 
     for raw in sys.stdin:
         raw = raw.lstrip("﻿").strip()  # tolerate a stray UTF-8 BOM
@@ -596,6 +622,17 @@ def main(cfg):
             pending_sig = None
             if not (kind == "prefight" and not cfg.get("prefight_heads_up", False)):
                 advisor.submit(kind, msg["game_state"], signature)
+
+        # Liveness heartbeat (throttled) so the overlay knows the game is running
+        # and can close itself when it stops.
+        wnow = time.time()
+        if wnow - last_hb > 1.0:
+            try:
+                with open(hb_path, "w") as _f:
+                    _f.write(str(wnow))
+            except Exception:
+                pass
+            last_hb = wnow
 
         # Always answer with a non-altering heartbeat so the game stays live.
         if msg.get("ready_for_command", True):

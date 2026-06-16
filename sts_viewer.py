@@ -7,6 +7,7 @@ the CommunicationMod bridge and only reads a file.
 """
 import json
 import os
+import time
 import tkinter as tk
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -14,6 +15,8 @@ with open(os.path.join(HERE, "config.json"), encoding="utf-8") as f:
     CFG = json.load(f)
 _advice = CFG["latest_advice_path"]
 ADVICE_PATH = _advice if os.path.isabs(_advice) else os.path.join(HERE, _advice)
+HEARTBEAT_PATH = os.path.join(os.path.dirname(ADVICE_PATH), "heartbeat")
+HEARTBEAT_GRACE = 8  # seconds; close the overlay after the bridge/game stops
 
 
 class Viewer:
@@ -32,6 +35,7 @@ class Viewer:
         self.text.tag_configure("hdr", foreground="#7fd1b9",
                                 font=("Consolas", 11, "bold"))
         self._mtime = None
+        self._seen_hb = False  # only auto-close once a live bridge has been seen
         self._show("Waiting for the first decision screen…\n"
                    "(Start a run with CommunicationMod enabled.)")
         self._poll()
@@ -48,6 +52,18 @@ class Viewer:
         self.text.config(state="disabled")
 
     def _poll(self):
+        # Close automatically once the bridge stops updating its heartbeat — i.e.
+        # the game quit. Only arms after we've seen at least one live heartbeat,
+        # so a manually-opened overlay (no game running) stays put.
+        try:
+            age = time.time() - os.path.getmtime(HEARTBEAT_PATH)
+            self._seen_hb = True
+            if age > HEARTBEAT_GRACE:
+                self.root.destroy()
+                return
+        except FileNotFoundError:
+            pass
+
         try:
             m = os.path.getmtime(ADVICE_PATH)
             if m != self._mtime:
