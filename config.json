@@ -1,0 +1,19 @@
+{
+  "mode": "stream",
+  "model": "claude-haiku-4-5",
+  "model_by_screen": {},
+  "claude_path": "claude",
+  "cli_timeout": 180,
+  "expected_latency_s": 15,
+  "debounce_seconds": 1.5,
+  "fast_mode": true,
+  "max_thinking_tokens": 0,
+  "restart_session_every": 20,
+  "system_prompt_path": "STS_ADVISOR.md",
+  "thesis_path": "state\\thesis.txt",
+  "latest_advice_path": "state\\latest_advice.txt",
+  "advice_log_path": "state\\advice_log.txt",
+  "debug_log_path": "state\\debug.log",
+  "prefight_heads_up": false,
+  "heartbeat_wait_frames": 20
+}

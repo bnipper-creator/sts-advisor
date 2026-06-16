@@ -1,0 +1,10 @@
+# Per-user runtime state (run logs, thesis, advice) — never share these
+state/*
+!state/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+
+# Local secrets (none used currently — subscription auth — but just in case)
+api_key.txt
