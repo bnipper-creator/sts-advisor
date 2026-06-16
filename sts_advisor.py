@@ -355,17 +355,21 @@ class ClaudeSession:
         # drops turns to ~1-3s with no real quality loss (strategy is in the system
         # prompt). Raise via config for deeper deliberation on hard decisions.
         env["MAX_THINKING_TOKENS"] = str(self.cfg.get("max_thinking_tokens", 0))
-        self.results = queue.Queue()  # drop any stale sentinels
+        q = queue.Queue()
+        self.results = q
         self.turns = 0
         self.proc = subprocess.Popen(
             self._args(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
             errors="replace", bufsize=1, env=env,
         )
-        threading.Thread(target=self._reader, args=(self.proc,), daemon=True).start()
+        # Bind the reader to THIS process's queue. If an old process is later
+        # killed, its reader drops its EOF sentinel into its own (discarded) queue
+        # — never into the new session's queue.
+        threading.Thread(target=self._reader, args=(self.proc, q), daemon=True).start()
         log(self.cfg, f"warm session up: model={self.model} pid={self.proc.pid}")
 
-    def _reader(self, proc):
+    def _reader(self, proc, q):
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -375,8 +379,8 @@ class ClaudeSession:
             except json.JSONDecodeError:
                 continue
             if evt.get("type") == "result":
-                self.results.put(evt.get("result", ""))
-        self.results.put(None)  # EOF -> the process exited
+                q.put(evt.get("result", ""))
+        q.put(None)  # EOF -> the process exited
 
     def _write(self, user_message):
         msg = {"type": "user", "message": {"role": "user",
@@ -393,6 +397,13 @@ class ClaudeSession:
                 log(self.cfg, f"recycling session to bound context "
                               f"(after {self.turns} turns, {self.model})")
                 self._start()
+            # Drop any orphaned result from a prior aborted/errored turn, so this
+            # screen can't be answered with the previous screen's result.
+            while True:
+                try:
+                    self.results.get_nowait()
+                except queue.Empty:
+                    break
             try:
                 self._write(user_message)
             except Exception:
