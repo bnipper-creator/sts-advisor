@@ -216,6 +216,20 @@ FAST_CONTRACT = (
 )
 
 
+# Appended to every contract. Stops the model from believing its own recommended
+# upgrades happened — the player often just browses GRID/Smith previews and backs
+# out. The deck is the only truth for what is upgraded.
+STATE_TRUTH_NOTE = (
+    "\n\nSTATE TRUTH (critical): the `deck` in the game state is the ONLY source of "
+    "truth for which cards are upgraded (an upgraded card is marked — e.g. a trailing "
+    "'+' or an upgrade count). On GRID / Smith / card-select screens the player is "
+    "often just BROWSING upgrade previews and may back out WITHOUT choosing — NEVER "
+    "assume a card was upgraded because you recommended it or saw a preview. A campfire "
+    "Smith upgrades exactly ONE card per visit. If your thesis claims upgrades the "
+    "current deck does not show, correct the thesis to match the deck."
+)
+
+
 def _trim_advice(advice):
     """Drop any preamble before the PICK line (in case the CLI prints a stray
     notice). If there's no PICK, keep the text as-is."""
@@ -281,7 +295,7 @@ def call_model_cli(cfg, system_prompt, user_message, model=None):
     args = [
         exe, "-p",
         "--system-prompt", system_prompt,
-        "--append-system-prompt", OUTPUT_CONTRACT,
+        "--append-system-prompt", OUTPUT_CONTRACT + STATE_TRUTH_NOTE,
         "--model", model or cfg["model"],
         "--tools", "",
         "--strict-mcp-config",  # load zero MCP servers — major per-call startup win
@@ -335,7 +349,7 @@ class ClaudeSession:
             "--output-format", "stream-json",
             "--verbose",
             "--system-prompt", self.system_prompt,
-            "--append-system-prompt", contract,
+            "--append-system-prompt", contract + STATE_TRUTH_NOTE,
             "--model", self.model,
             "--tools", "",
             "--strict-mcp-config",
