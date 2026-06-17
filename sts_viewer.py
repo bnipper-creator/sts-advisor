@@ -16,7 +16,10 @@ with open(os.path.join(HERE, "config.json"), encoding="utf-8") as f:
 _advice = CFG["latest_advice_path"]
 ADVICE_PATH = _advice if os.path.isabs(_advice) else os.path.join(HERE, _advice)
 HEARTBEAT_PATH = os.path.join(os.path.dirname(ADVICE_PATH), "heartbeat")
-HEARTBEAT_GRACE = 8  # seconds; close the overlay after the bridge/game stops
+# Close grace: the bridge stamps the heartbeat every ~0.5s while alive, so a few
+# seconds is plenty of margin and the overlay vanishes quickly when the game quits.
+HEARTBEAT_GRACE = float(CFG.get("viewer_close_grace_s", 2.5))
+POLL_MS = 300
 
 
 class Viewer:
@@ -74,7 +77,7 @@ class Viewer:
                     self._show(f.read())
         except FileNotFoundError:
             pass
-        self.root.after(500, self._poll)
+        self.root.after(POLL_MS, self._poll)
 
 
 if __name__ == "__main__":

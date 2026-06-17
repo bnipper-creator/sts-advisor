@@ -563,6 +563,23 @@ def launch_viewer(cfg):
         log(cfg, "viewer launch failed:\n" + traceback.format_exc())
 
 
+def _write_heartbeat(path):
+    try:
+        with open(path, "w") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
+
+
+def _heartbeat_loop(path, interval=0.5):
+    """Stamp the heartbeat on a fast fixed timer, independent of game activity,
+    so the overlay can use a short close-grace and still never false-close while
+    the bridge process is alive. Dies with the process when the game quits."""
+    while True:
+        _write_heartbeat(path)
+        time.sleep(interval)
+
+
 def main(cfg):
     # Make stdout/stdin behave: utf-8, '\n' line endings, no buffering surprises.
     try:
@@ -580,14 +597,10 @@ def main(cfg):
     advisor = Advisor(cfg)
 
     hb_path = os.path.join(os.path.dirname(cfg["latest_advice_path"]), "heartbeat")
-    # Stamp a FRESH heartbeat before launching the overlay, so it sees the bridge
-    # as live immediately and doesn't self-close on a stale file from a prior run.
-    last_hb = time.time()
-    try:
-        with open(hb_path, "w") as _f:
-            _f.write(str(last_hb))
-    except Exception:
-        last_hb = 0.0
+    # Stamp a FRESH heartbeat before launching the overlay (so it doesn't self-
+    # close on a stale file), then keep it fresh on a fast background timer.
+    _write_heartbeat(hb_path)
+    threading.Thread(target=_heartbeat_loop, args=(hb_path,), daemon=True).start()
     if cfg.get("launch_viewer", True):
         launch_viewer(cfg)
 
@@ -641,17 +654,6 @@ def main(cfg):
             pending_sig = None
             if not (kind == "prefight" and not cfg.get("prefight_heads_up", False)):
                 advisor.submit(kind, msg["game_state"], signature)
-
-        # Liveness heartbeat (throttled) so the overlay knows the game is running
-        # and can close itself when it stops.
-        wnow = time.time()
-        if wnow - last_hb > 1.0:
-            try:
-                with open(hb_path, "w") as _f:
-                    _f.write(str(wnow))
-            except Exception:
-                pass
-            last_hb = wnow
 
         # Always answer with a non-altering heartbeat so the game stays live.
         if msg.get("ready_for_command", True):

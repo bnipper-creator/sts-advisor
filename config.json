@@ -16,5 +16,6 @@
   "debug_log_path": "state\\debug.log",
   "prefight_heads_up": false,
   "heartbeat_wait_frames": 20,
-  "launch_viewer": true
+  "launch_viewer": true,
+  "viewer_close_grace_s": 2.5
 }
