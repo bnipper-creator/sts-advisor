@@ -10,6 +10,7 @@
   "max_thinking_tokens": 0,
   "restart_session_every": 20,
   "system_prompt_path": "STS_ADVISOR.md",
+  "card_data_dir": "data\\sts1",
   "thesis_path": "state\\thesis.txt",
   "latest_advice_path": "state\\latest_advice.txt",
   "advice_log_path": "state\\advice_log.txt",

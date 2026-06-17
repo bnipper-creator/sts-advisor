@@ -93,6 +93,7 @@ couple seconds per screen.
 | `model_by_screen` | `{}` | Per-screen model overrides, e.g. `{"BOSS_REWARD": "claude-sonnet-4-6"}`. |
 | `prefight_heads_up` | `false` | `true` adds a brief threat read at the start of each fight. |
 | `debounce_seconds` | `1.5` | How long a screen must hold still before it's advised. |
+| `card_data_dir` | `data\sts1` | Folder with `cards.json`/`relics.json`. Their exact text (base + upgraded) is injected per screen so the model reads cards instead of guessing. Vanilla StS1 only; missing files just disable the feature. |
 
 Paths in `config.json` are relative to the project folder, so you can move/rename it
 freely (just re-run `install.ps1` afterward so CommunicationMod gets the new path).

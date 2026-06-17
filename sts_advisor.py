@@ -65,7 +65,7 @@ def load_config(path=DEFAULT_CONFIG_PATH):
     # Resolve relative paths against the script directory, so the whole folder can
     # be moved/renamed without editing config.json.
     for key in ("system_prompt_path", "thesis_path", "latest_advice_path",
-                "advice_log_path", "debug_log_path"):
+                "advice_log_path", "debug_log_path", "card_data_dir"):
         if key in cfg and not os.path.isabs(cfg[key]):
             cfg[key] = os.path.join(HERE, cfg[key])
     # Make state dir exist.
@@ -250,6 +250,152 @@ def parse_response(text):
     return _trim_advice(text), None
 
 
+# --------------------------------------------------------------------------- #
+# Card / relic reference — ground the model in EXACT base-game text instead of
+# memory. CommunicationMod streams card/relic *names and ids* but no rules text,
+# so the model otherwise reasons from recall. We vendor the StS1 data parsed from
+# the game JAR (data/sts1/{cards,relics}.json, from nkhoit/spire-archive) and
+# join it to whatever cards/relics appear on the current screen, by a normalized
+# id/name key (CommunicationMod's `Strike_R` == archive's `STRIKE_R`).
+# --------------------------------------------------------------------------- #
+
+DEFAULT_CARD_DATA_DIR = os.path.join(HERE, "data", "sts1")
+
+# Cached (cards_by_key, relics_by_key); built once, reused for every turn.
+_REF_INDEX = None
+
+
+def _norm_key(s):
+    """Normalize an id/name to a join key: lowercase, alphanumerics only. Makes
+    `Strike_R`, `STRIKE_R`, and `Strike` collapse compatibly, and lets a
+    choice_list name like `pommel strike` match the card named `Pommel Strike`."""
+    return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
+
+def _ref_keys(entry):
+    keys = set()
+    if entry.get("id"):
+        keys.add(_norm_key(entry["id"]))
+    if entry.get("name"):
+        keys.add(_norm_key(entry["name"]))
+    return keys
+
+
+def load_reference_index(cfg):
+    """Lazily load and index the vendored card/relic data. Missing/broken files
+    are non-fatal: we log and return empty indexes, and the prompt simply omits
+    the reference block (falling back to the prompt's 'from memory' handling)."""
+    global _REF_INDEX
+    if _REF_INDEX is not None:
+        return _REF_INDEX
+    data_dir = cfg.get("card_data_dir") or DEFAULT_CARD_DATA_DIR
+    cards_by_key, relics_by_key = {}, {}
+    for fname, idx in (("cards.json", cards_by_key), ("relics.json", relics_by_key)):
+        try:
+            with open(os.path.join(data_dir, fname), "r", encoding="utf-8") as f:
+                for entry in json.load(f):
+                    for k in _ref_keys(entry):
+                        idx.setdefault(k, entry)  # first id/name wins on collision
+        except Exception as e:
+            log(cfg, f"reference {fname} unavailable: {e}")
+    _REF_INDEX = (cards_by_key, relics_by_key)
+    log(cfg, f"reference loaded: {len(cards_by_key)} card keys, "
+             f"{len(relics_by_key)} relic keys (dir={data_dir})")
+    return _REF_INDEX
+
+
+def collect_references(game_state, cards_idx, relics_idx):
+    """Resolve every card/relic present on the current screen against the data.
+    Walks the card/relic-bearing containers of the state and the choice_list;
+    returns (cards, relics) as de-duplicated lists in first-seen order. Anything
+    that isn't a known StS1 card/relic (monsters, potions, modded/StS2 cards,
+    map nodes) simply doesn't match and is skipped."""
+    cards_out, relics_out = {}, {}
+
+    def consider(v):
+        if not isinstance(v, str):
+            return
+        k = _norm_key(v)
+        if not k:
+            return
+        if k in cards_idx:
+            c = cards_idx[k]
+            cards_out.setdefault(c["id"], c)
+        elif k in relics_idx:
+            r = relics_idx[k]
+            relics_out.setdefault(r["id"], r)
+
+    def consider_list(items):
+        for it in items or []:
+            if isinstance(it, dict):
+                consider(it.get("id") or it.get("name"))
+            else:
+                consider(it)
+
+    consider_list(game_state.get("deck"))
+    consider_list(game_state.get("relics"))
+    ss = game_state.get("screen_state") or {}
+    consider_list(ss.get("cards"))    # card reward / shop / grid
+    consider_list(ss.get("relics"))   # shop / boss reward
+    cs = game_state.get("combat_state") or {}
+    for pile in ("hand", "draw_pile", "discard_pile", "exhaust_pile"):
+        consider_list(cs.get(pile))
+    consider_list(game_state.get("choice_list"))  # names on card/boss-relic screens
+    return list(cards_out.values()), list(relics_out.values())
+
+
+# StS internal cost sentinels: -1 = X-cost, -2 = unplayable (status/curse).
+_COST_LABEL = {-1: "X", -2: "unplayable"}
+
+
+def _flat(s):
+    """Collapse the multi-line card text into one tight line."""
+    return " ".join((s or "").split())
+
+
+def _fmt_card(c):
+    cost = c.get("cost")
+    cost_s = _COST_LABEL.get(cost, "?" if cost is None else str(cost))
+    meta = f"{cost_s} energy, {c.get('type', '?')}"
+    if c.get("rarity"):
+        meta += f"/{c['rarity']}"
+    line = f"- {c.get('name')} ({meta}): {_flat(c.get('description'))}"
+    up = (c.get("upgrade") or {}).get("description")
+    if up and _flat(up) != _flat(c.get("description")):
+        line += f"  [Upgraded: {_flat(up)}]"
+    return line
+
+
+def _fmt_relic(r):
+    head = f"- {r.get('name')}"
+    if r.get("tier"):
+        head += f" ({r['tier']})"
+    return f"{head}: {_flat(r.get('description'))}"
+
+
+def build_reference_block(game_state, cfg):
+    """The CARD REFERENCE / RELIC REFERENCE text injected into the prompt. Empty
+    string when no data is loaded or nothing on screen matches."""
+    cards_idx, relics_idx = load_reference_index(cfg)
+    if not cards_idx and not relics_idx:
+        return ""
+    cards, relics = collect_references(game_state, cards_idx, relics_idx)
+    parts = []
+    if cards:
+        parts.append(
+            "CARD REFERENCE (exact base-game text for cards on this screen — "
+            "AUTHORITATIVE; reason from this, not memory. Numbers are BASE values; "
+            "live combat may modify them):")
+        parts += [_fmt_card(c) for c in cards]
+    if relics:
+        if parts:
+            parts.append("")
+        parts.append(
+            "RELIC REFERENCE (exact base-game text — AUTHORITATIVE; not memory):")
+        parts += [_fmt_relic(r) for r in relics]
+    return "\n".join(parts)
+
+
 def slim_state(game_state, kind):
     """Drop the heaviest fields when the current decision doesn't need them.
     The `map` array and full `combat_state` dominate the payload; trimming them
@@ -263,13 +409,17 @@ def slim_state(game_state, kind):
     return gs
 
 
-def build_user_message(kind, game_state, thesis):
+def build_user_message(kind, game_state, thesis, cfg):
     label = "PRE-FIGHT (enemy info present)" if kind == "prefight" else "DECISION SCREEN"
     gs_json = json.dumps(slim_state(game_state, kind), indent=2, default=str)
     prior = thesis if thesis else "(empty — first call)"
+    # Reference is built from the FULL state (deck/relics), not the slimmed dump.
+    ref = build_reference_block(game_state, cfg)
+    ref_section = f"{ref}\n\n" if ref else ""
     return (
         f"{label}\n\n"
         f"GAME STATE (CommunicationMod JSON):\n{gs_json}\n\n"
+        f"{ref_section}"
         f"PRIOR THESIS:\n{prior}\n"
     )
 
@@ -519,7 +669,7 @@ class Advisor:
     def _handle(self, kind, game_state, signature):
         cfg = self.cfg
         thesis = read_thesis(cfg)  # read fresh so we chain off the latest
-        user_message = build_user_message(kind, game_state, thesis)
+        user_message = build_user_message(kind, game_state, thesis, cfg)
         floor = game_state.get("floor")
         screen = game_state.get("screen_type")
         model = pick_model(cfg, screen)
@@ -743,6 +893,35 @@ def selftest():
     k3, sig3, _ = describe_moment(card_msg)
     assert sig3 == sig, "signature should be stable for the same screen"
 
+    # 6) Card/relic reference: the vendored data loads and joins to the state by
+    #    normalized id/name, and the prompt carries the exact text (not memory).
+    cards_idx, relics_idx = load_reference_index(cfg)
+    ref_ok = bool(cards_idx) and bool(relics_idx)
+    if ref_ok:
+        # Normalized join: CommunicationMod-style id matches archive's uppercase id.
+        assert _norm_key("Strike_R") == _norm_key("STRIKE_R")
+        ref_state = {
+            "deck": [{"id": "Strike_R"}, {"id": "Bash"}],
+            "relics": [{"id": "Burning Blood"}, {"name": "Akabeko"}],
+            "screen_state": {"cards": [{"name": "Pommel Strike"}]},
+            "choice_list": ["pommel strike", "thunderclap"],
+        }
+        cards, relics = collect_references(ref_state, cards_idx, relics_idx)
+        names = {c["name"] for c in cards}
+        assert {"Strike", "Bash", "Pommel Strike", "Thunderclap"} <= names, names
+        assert {"Burning Blood", "Akabeko"} <= {r["name"] for r in relics}
+        # A non-StS1 token must NOT match (graceful fallback for modded/StS2).
+        none_c, none_r = collect_references(
+            {"choice_list": ["totally not a real card xyz"]}, cards_idx, relics_idx)
+        assert not none_c and not none_r
+        block = build_reference_block(ref_state, cfg)
+        assert "CARD REFERENCE" in block and "RELIC REFERENCE" in block
+        assert "Apply 2 Vulnerable" in block      # Bash base text
+        assert "[Upgraded:" in block              # upgraded text included
+        # And it actually reaches the prompt.
+        um = build_user_message("screen", ref_state, "", cfg)
+        assert "CARD REFERENCE" in um and "Akabeko" in um
+
     print("SELFTEST PASSED")
     print("  - owned-screen detection: OK")
     print("  - pre-fight detection: OK")
@@ -750,6 +929,8 @@ def selftest():
     print("  - thesis round-trip persisted: OK")
     print("  - advice file written: OK")
     print("  - screen dedup signature stable: OK")
+    print(f"  - card/relic reference join + injection: "
+          f"{'OK' if ref_ok else 'SKIPPED (no data files)'}")
     print(f"\nthesis file -> {cfg['thesis_path']}")
     print(f"advice file -> {cfg['latest_advice_path']}")
 
